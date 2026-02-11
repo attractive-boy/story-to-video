@@ -1,0 +1,5 @@
+{
+  "name": "Story-to-Video Studio",
+  "description": "Generate a visual storyboard from text using Gemini Imagen, and turn selected frames into high-quality videos using Veo.",
+  "requestFramePermissions": []
+}
