@@ -2,26 +2,73 @@
   "name": "story-to-video-studio",
   "private": true,
   "version": "0.1.0",
+  "main": "main.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "dev:weapp": "taro build --type weapp --watch",
+    "build:weapp": "taro build --type weapp",
+    "dev:h5": "taro build --type h5 --watch",
+    "build:h5": "taro build --type h5",
+    "next:dev": "next dev",
+    "next:build": "next build",
+    "next:start": "next start",
+    "lint": "next lint",
+    "electron:dev": "concurrently \"npm run next:dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "npm run next:build && electron-builder"
+  },
+  "build": {
+    "appId": "com.story.video.studio",
+    "productName": "StoryVideoStudio",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "main.js",
+      "preload.js"
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    }
   },
   "dependencies": {
     "@google/genai": "^1.40.0",
-    "eslint-config-next": "^16.1.6",
+    "@tarojs/components": "3.6.22",
+    "@tarojs/helper": "3.6.22",
+    "@tarojs/plugin-framework-react": "3.6.22",
+    "@tarojs/plugin-platform-h5": "3.6.22",
+    "@tarojs/plugin-platform-weapp": "3.6.22",
+    "@tarojs/react": "3.6.22",
+    "@tarojs/runtime": "3.6.22",
+    "@tarojs/shared": "3.6.22",
+    "@tarojs/taro": "3.6.22",
     "next": "^16.1.6",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "electron-serve": "^3.0.1"
   },
   "devDependencies": {
+    "@tarojs/cli": "3.6.22",
     "@types/node": "^22.19.10",
-    "@types/react": "^19.2.13",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
     "autoprefixer": "^10.4.17",
+    "concurrently": "^9.2.1",
+    "electron": "^40.4.0",
+    "electron-builder": "^26.7.0",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
-    "typescript": "~5.8.2"
+    "typescript": "~5.8.2",
+    "wait-on": "^9.0.3"
   }
 }

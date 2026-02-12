@@ -4,8 +4,9 @@ import React, { useState } from 'react';
 import { Header } from '../components/Header';
 import { LoadingBar } from '../components/LoadingBar';
 import { ModelSelector } from '../components/ModelSelector';
+import { ApiKeyModal } from '../components/ApiKeyModal';
 import { AppStep, ImageAsset, VideoAsset, VideoModel } from '../types';
-import { generateBatchImages, checkAndRequestApiKey, generateVideoFromImage, generateVideoFromText, resetApiKey } from '../services/geminiService';
+import { generateBatchImages, checkApiKey, setApiKey, generateVideoFromImage, generateVideoFromText, resetApiKey } from '../services/geminiService';
 
 // Define the available models based on user request (Sora, NanoBanana, Veo)
 const AVAILABLE_MODELS: VideoModel[] = [
@@ -119,28 +120,33 @@ export default function Home() {
   const [imageProgress, setImageProgress] = useState<number>(0);
   const [generatingVideosCount, setGeneratingVideosCount] = useState<{current: number, total: number}>({ current: 0, total: 0 });
 
+  // API Key Modal State
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleReset = () => {
-    if (confirm("Start over? All generated content will be lost.")) {
-      setStep(AppStep.INPUT);
-      setImages([]);
-      setVideos([]);
-      setPrompt('');
-      setVideoPrompt('');
-      setImageProgress(0);
+    setStep(AppStep.INPUT);
+    setImages([]);
+    setVideos([]);
+    setPrompt('');
+    setVideoPrompt('');
+    setImageProgress(0);
+  };
+
+  const handleResetApiKey = () => {
+    if (confirm("Are you sure you want to reset your API Key?")) {
+      resetApiKey();
+      setIsApiKeyModalOpen(true);
     }
   };
 
-  const handleResetApiKey = async () => {
-    if (confirm("Are you sure you want to reset your API Key?")) {
-      resetApiKey();
-      const hasKey = await checkAndRequestApiKey();
-      if (hasKey) {
-        alert("API Key has been updated successfully.");
-      } else {
-        alert("API Key was cleared. You will need to provide one before generating content.");
-      }
+  const handleSaveApiKey = (key: string) => {
+    setApiKey(key);
+    if (pendingAction) {
+      pendingAction();
+      setPendingAction(null);
     }
   };
 
@@ -188,13 +194,13 @@ export default function Home() {
   const handleGenerateImages = async () => {
     if (!prompt.trim()) return;
 
-    try {
-      const hasKey = await checkAndRequestApiKey();
-      if (!hasKey) {
-        alert("A valid API Key is required to use this application.");
-        return;
-      }
+    if (!checkApiKey()) {
+      setPendingAction(() => handleGenerateImages);
+      setIsApiKeyModalOpen(true);
+      return;
+    }
 
+    try {
       setStep(AppStep.GENERATING_IMAGES);
       setImageProgress(5); 
 
@@ -223,13 +229,13 @@ export default function Home() {
   const handleDirectVideoGeneration = async () => {
     if (!prompt.trim()) return;
 
-    try {
-      const hasKey = await checkAndRequestApiKey();
-      if (!hasKey) {
-        alert("A valid API Key is required to use this application.");
-        return;
-      }
+    if (!checkApiKey()) {
+      setPendingAction(() => handleDirectVideoGeneration);
+      setIsApiKeyModalOpen(true);
+      return;
+    }
 
+    try {
       setStep(AppStep.GENERATING_VIDEOS);
       
       const newVideoId = crypto.randomUUID();
@@ -325,6 +331,12 @@ export default function Home() {
   return (
     <div className="min-h-screen pb-20">
       <Header currentStep={step} onReset={handleReset} onResetApiKey={handleResetApiKey} />
+
+      <ApiKeyModal 
+        isOpen={isApiKeyModalOpen} 
+        onClose={() => setIsApiKeyModalOpen(false)} 
+        onSave={handleSaveApiKey} 
+      />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Hidden file input for uploading images */}

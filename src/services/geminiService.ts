@@ -21,21 +21,19 @@ export const resetApiKey = () => {
 
 /**
  * Check for API key in localStorage.
- * If missing, prompt the user to enter it.
  */
-export const checkAndRequestApiKey = async (): Promise<boolean> => {
-  let apiKey = localStorage.getItem("grsai_api_key");
-  
-  if (!apiKey) {
-    apiKey = prompt("Please enter your Grsai API Key (from https://grsai.ai/zh/dashboard/models):");
-    if (apiKey && apiKey.trim()) {
-      localStorage.setItem("grsai_api_key", apiKey.trim());
-      return true;
-    }
-    return false;
+export const checkApiKey = (): boolean => {
+  const apiKey = localStorage.getItem("grsai_api_key");
+  return !!(apiKey && apiKey.trim());
+};
+
+/**
+ * Set API key in localStorage.
+ */
+export const setApiKey = (key: string) => {
+  if (key && key.trim()) {
+    localStorage.setItem("grsai_api_key", key.trim());
   }
-  
-  return true;
 };
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
