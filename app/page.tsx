@@ -132,10 +132,15 @@ export default function Home() {
     }
   };
 
-  const handleResetApiKey = () => {
+  const handleResetApiKey = async () => {
     if (confirm("Are you sure you want to reset your API Key?")) {
       resetApiKey();
-      alert("API Key has been reset. You will be prompted for a new one on your next generation.");
+      const hasKey = await checkAndRequestApiKey();
+      if (hasKey) {
+        alert("API Key has been updated successfully.");
+      } else {
+        alert("API Key was cleared. You will need to provide one before generating content.");
+      }
     }
   };
 
@@ -322,6 +327,15 @@ export default function Home() {
       <Header currentStep={step} onReset={handleReset} onResetApiKey={handleResetApiKey} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Hidden file input for uploading images */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleImageUpload}
+          accept="image/*"
+          multiple
+          className="hidden"
+        />
         
         {/* STEP 1: INPUT */}
         {step === AppStep.INPUT && (
@@ -409,14 +423,6 @@ export default function Home() {
                   </div>
 
                   <div className="relative">
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      onChange={handleImageUpload}
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                    />
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold text-lg transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
