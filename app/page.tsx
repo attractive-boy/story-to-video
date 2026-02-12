@@ -101,6 +101,7 @@ export default function Home() {
   const [videoPrompt, setVideoPrompt] = useState<string>('');
   const [selectedModelId, setSelectedModelId] = useState<string>('nano-banana-pro');
   const [selectedVideoModelId, setSelectedVideoModelId] = useState<string>('sora-2.0');
+  const [imageCount, setImageCount] = useState<number>(4);
   
   // Categorize models for easier filtering
   const IMAGE_MODELS = AVAILABLE_MODELS.filter(m => 
@@ -143,8 +144,8 @@ export default function Home() {
       setStep(AppStep.GENERATING_IMAGES);
       setImageProgress(5); 
 
-      const generated = await generateBatchImages(prompt, (count) => {
-        setImageProgress(Math.min(100, Math.round((count / 20) * 100)));
+      const generated = await generateBatchImages(prompt, imageCount, (count) => {
+        setImageProgress(Math.min(100, Math.round((count / imageCount) * 100)));
       }, selectedModelId);
 
       // Initialize each image with the prompt used to generate it
@@ -288,6 +289,25 @@ export default function Home() {
                 selectedModelId={selectedModelId} 
                 onSelect={setSelectedModelId} 
               />
+
+              <div className="flex flex-col space-y-2">
+                <label className="text-sm font-medium text-slate-400">Number of Images</label>
+                <div className="flex gap-2">
+                  {[1, 4, 8, 12].map((num) => (
+                    <button
+                      key={num}
+                      onClick={() => setImageCount(num)}
+                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                        imageCount === num 
+                          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' 
+                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               <div className="space-y-4">
                 <textarea

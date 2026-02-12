@@ -139,11 +139,12 @@ const generateGptImage = async (prompt: string, modelId: string): Promise<string
  */
 export const generateBatchImages = async (
   prompt: string, 
+  count: number = 20,
   onProgress: (count: number) => void,
   modelId: string = "nano-banana-pro"
 ): Promise<ImageAsset[]> => {
   const results: ImageAsset[] = [];
-  const TOTAL_IMAGES = 1;
+  const TOTAL_IMAGES = count;
   
   try {
     const promises = [];
