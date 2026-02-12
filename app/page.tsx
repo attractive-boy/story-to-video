@@ -5,7 +5,7 @@ import { Header } from '../components/Header';
 import { LoadingBar } from '../components/LoadingBar';
 import { ModelSelector } from '../components/ModelSelector';
 import { AppStep, ImageAsset, VideoAsset, VideoModel } from '../types';
-import { generateBatchImages, checkAndRequestApiKey, generateVideoFromImage, generateVideoFromText } from '../services/geminiService';
+import { generateBatchImages, checkAndRequestApiKey, generateVideoFromImage, generateVideoFromText, resetApiKey } from '../services/geminiService';
 
 // Define the available models based on user request (Sora, NanoBanana, Veo)
 const AVAILABLE_MODELS: VideoModel[] = [
@@ -127,6 +127,13 @@ export default function Home() {
       setPrompt('');
       setVideoPrompt('');
       setImageProgress(0);
+    }
+  };
+
+  const handleResetApiKey = () => {
+    if (confirm("Are you sure you want to reset your API Key?")) {
+      resetApiKey();
+      alert("API Key has been reset. You will be prompted for a new one on your next generation.");
     }
   };
 
@@ -266,7 +273,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen pb-20">
-      <Header currentStep={step} onReset={handleReset} />
+      <Header currentStep={step} onReset={handleReset} onResetApiKey={handleResetApiKey} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
@@ -292,20 +299,34 @@ export default function Home() {
 
               <div className="flex flex-col space-y-2">
                 <label className="text-sm font-medium text-slate-400">Number of Images</label>
-                <div className="flex gap-2">
-                  {[1, 4, 8, 12].map((num) => (
-                    <button
-                      key={num}
-                      onClick={() => setImageCount(num)}
-                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                        imageCount === num 
-                          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' 
-                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                      }`}
-                    >
-                      {num}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700">
+                    {[1, 4, 8].map((num) => (
+                      <button
+                        key={num}
+                        onClick={() => setImageCount(num)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                          imageCount === num 
+                            ? 'bg-indigo-600 text-white shadow-sm' 
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                        }`}
+                      >
+                        {num}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  <div className="flex items-center gap-2 bg-slate-800 p-1 px-2 rounded-lg border border-slate-700">
+                    <span className="text-xs text-slate-500 font-medium">Custom:</span>
+                    <input 
+                      type="number" 
+                      min="1" 
+                      max="20"
+                      value={imageCount}
+                      onChange={(e) => setImageCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                      className="w-12 bg-transparent text-sm text-white focus:outline-none text-center"
+                    />
+                  </div>
                 </div>
               </div>
 

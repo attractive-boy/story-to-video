@@ -13,6 +13,13 @@ const getHeaders = () => {
 };
 
 /**
+ * Reset API key in localStorage.
+ */
+export const resetApiKey = () => {
+  localStorage.removeItem("grsai_api_key");
+};
+
+/**
  * Check for API key in localStorage.
  * If missing, prompt the user to enter it.
  */
