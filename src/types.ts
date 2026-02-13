@@ -3,8 +3,12 @@ export interface ImageAsset {
   id: string;
   base64: string;
   mimeType: string;
+  url?: string;
   selected: boolean;
   prompt?: string;
+  status?: 'pending' | 'processing' | 'completed' | 'failed';
+  progress?: number;
+  error?: string;
 }
 
 export interface VideoAsset {
@@ -15,6 +19,7 @@ export interface VideoAsset {
   error?: string;
   prompt?: string; // Store prompt for reference if needed
   modelUsed?: string;
+  progress?: number;
 }
 
 export enum AppStep {

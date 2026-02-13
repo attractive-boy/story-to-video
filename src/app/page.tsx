@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import JSZip from 'jszip';
 import { Header } from '../components/Header';
 import { LoadingBar } from '../components/LoadingBar';
 import { ModelSelector } from '../components/ModelSelector';
 import { ApiKeyModal } from '../components/ApiKeyModal';
 import { AppStep, ImageAsset, VideoAsset, VideoModel } from '../types';
-import { generateBatchImages, checkApiKey, setApiKey, generateVideoFromImage, generateVideoFromText, resetApiKey } from '../services/geminiService';
+import { generateBatchImages, checkApiKey, setApiKey, generateVideoFromImage, generateVideoFromText, resetApiKey, uploadImageToAzure } from '../services/geminiService';
 
 // Define the available models based on user request (Sora, NanoBanana, Veo)
 const AVAILABLE_MODELS: VideoModel[] = [
@@ -102,7 +103,11 @@ export default function Home() {
   const [videoPrompt, setVideoPrompt] = useState<string>('');
   const [selectedModelId, setSelectedModelId] = useState<string>('nano-banana-pro');
   const [selectedVideoModelId, setSelectedVideoModelId] = useState<string>('sora-2.0');
+  const [videoAspectRatio, setVideoAspectRatio] = useState<string>('16:9');
   const [imageCount, setImageCount] = useState<number>(4);
+  const [imageSize, setImageSize] = useState<string>('1:1');
+  const [nanoAspectRatio, setNanoAspectRatio] = useState<string>('auto');
+  const [nanoResolution, setNanoResolution] = useState<string>('1K');
   
   // Categorize models for easier filtering
   const IMAGE_MODELS = AVAILABLE_MODELS.filter(m => 
@@ -190,6 +195,47 @@ export default function Home() {
     }
   };
 
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleBatchDownload = async () => {
+    const completedVideos = videos.filter(v => v.status === 'completed' && v.url);
+    if (completedVideos.length === 0) return;
+
+    setIsDownloading(true);
+    const zip = new JSZip();
+    const folder = zip.folder("generated_videos");
+
+    try {
+      const downloadPromises = completedVideos.map(async (vid, index) => {
+        try {
+          const response = await fetch(vid.url!);
+          const blob = await response.blob();
+          const fileName = `video_${index + 1}.mp4`;
+          folder?.file(fileName, blob);
+        } catch (err) {
+          console.error(`Failed to download video ${index + 1}:`, err);
+        }
+      });
+
+      await Promise.all(downloadPromises);
+
+      const content = await zip.generateAsync({ type: "blob" });
+      const url = window.URL.createObjectURL(content);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `story_videos_${new Date().getTime()}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Batch download failed:', err);
+      alert('Batch download failed, please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   // 1. Generate Images Handler
   const handleGenerateImages = async () => {
     if (!prompt.trim()) return;
@@ -203,19 +249,38 @@ export default function Home() {
     try {
       setStep(AppStep.GENERATING_IMAGES);
       setImageProgress(5); 
+      setImages([]); // Clear previous images
 
-      const generated = await generateBatchImages(prompt, imageCount, (count) => {
-        setImageProgress(Math.min(100, Math.round((count / imageCount) * 100)));
-      }, selectedModelId);
+      const currentAspectRatioOrSize = selectedModelId.includes('nano-banana') ? nanoAspectRatio : imageSize;
+      const currentResolution = selectedModelId.includes('nano-banana') ? nanoResolution : '1K';
 
-      // Initialize each image with the prompt used to generate it
-      const imagesWithPrompt = generated.map(img => ({
-        ...img,
-        prompt: prompt
-      }));
+      await generateBatchImages(prompt, imageCount, (update) => {
+        if (typeof update === 'number') {
+          setImageProgress(Math.min(100, Math.round((update / imageCount) * 100)));
+          return;
+        }
 
-      setImages(imagesWithPrompt);
-      setVideoPrompt(prompt); // Keep global video prompt as default fallback
+        setImages(prev => {
+          const index = prev.findIndex(img => img.id === update.id);
+          if (index >= 0) {
+            const newImages = [...prev];
+            newImages[index] = { ...newImages[index], ...update };
+            return newImages;
+          } else if (update.id) {
+            return [...prev, {
+              id: update.id,
+              base64: '',
+              mimeType: 'image/png',
+              selected: true,
+              prompt: prompt,
+              ...update
+            } as ImageAsset];
+          }
+          return prev;
+        });
+      }, selectedModelId, currentAspectRatioOrSize, currentResolution);
+
+      setVideoPrompt(prompt);
       setStep(AppStep.SELECTION);
     } catch (error) {
       console.error(error);
@@ -243,17 +308,24 @@ export default function Home() {
         id: newVideoId,
         status: 'processing', // Start immediately as processing
         prompt: prompt,
-        modelUsed: selectedModelId
+        modelUsed: selectedModelId,
+        progress: 0
       };
       
       setVideos([newVideo]);
       setGeneratingVideosCount({ current: 0, total: 1 });
 
       try {
-        const videoUrl = await generateVideoFromText(prompt, selectedModelId);
-        setVideos(prev => prev.map(v => v.id === newVideoId ? { ...v, status: 'completed', url: videoUrl } : v));
+        const videoUrl = await generateVideoFromText(prompt, selectedModelId, (prog) => {
+          setVideos(prev => prev.map(v => v.id === newVideoId ? { ...v, progress: prog } : v));
+        }, videoAspectRatio);
+        setVideos(prev => prev.map(v => v.id === newVideoId ? { ...v, status: 'completed', url: videoUrl, progress: 100 } : v));
       } catch (err) {
-        setVideos(prev => prev.map(v => v.id === newVideoId ? { ...v, status: 'failed', error: 'Generation failed' } : v));
+        setVideos(prev => prev.map(v => v.id === newVideoId ? { 
+          ...v, 
+          status: 'failed', 
+          error: err instanceof Error ? err.message : 'Generation failed' 
+        } : v));
       }
       
       setGeneratingVideosCount({ current: 1, total: 1 });
@@ -297,31 +369,50 @@ export default function Home() {
       imageId: img.id,
       status: 'pending',
       prompt: img.prompt || videoPrompt,
-      modelUsed: selectedVideoModelId
+      modelUsed: selectedVideoModelId,
+      progress: 0
     }));
     setVideos(newVideos);
     setGeneratingVideosCount({ current: 0, total: newVideos.length });
 
-    let completedCount = 0;
-
-    for (const vid of newVideos) {
+    // Start all generations in parallel
+    const generationPromises = newVideos.map(async (vid) => {
       const img = selectedImages.find(i => i.id === vid.imageId);
-      if (!img) continue;
+      if (!img) return;
 
       setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, status: 'processing' } : v));
 
       try {
-        // Use the per-image prompt or fallback to global videoPrompt
-        const currentPrompt = img.prompt || videoPrompt;
-        const videoUrl = await generateVideoFromImage(currentPrompt, img.base64, selectedVideoModelId);
-        setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, status: 'completed', url: videoUrl } : v));
-      } catch (err) {
-        setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, status: 'failed', error: 'Generation failed' } : v));
-      }
+        // 1. Ensure image has a URL (upload to Azure if it's local/base64 only)
+        let imageUrl = img.url;
+        if (!imageUrl) {
+          try {
+            setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, progress: 10 } : v));
+            imageUrl = await uploadImageToAzure(img.base64, img.mimeType);
+            setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, progress: 30 } : v));
+            // Update the image asset with the new URL for future use
+            setImages(prev => prev.map(i => i.id === img.id ? { ...i, url: imageUrl } : i));
+          } catch (uploadError) {
+            console.error("Failed to upload image to Azure:", uploadError);
+            throw new Error("Failed to upload image to Azure storage.");
+          }
+        }
 
-      completedCount++;
-      setGeneratingVideosCount({ current: completedCount, total: newVideos.length });
-    }
+        // 2. Generate video using the URL
+        const currentPrompt = img.prompt || videoPrompt;
+        const videoUrl = await generateVideoFromImage(currentPrompt, imageUrl, selectedVideoModelId, (prog) => {
+          const adjustedProg = 30 + (prog * 0.7);
+          setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, progress: Math.round(adjustedProg) } : v));
+        }, videoAspectRatio);
+        setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, status: 'completed', url: videoUrl, progress: 100 } : v));
+      } catch (err) {
+        setVideos(prev => prev.map(v => v.id === vid.id ? { ...v, status: 'failed', error: err instanceof Error ? err.message : 'Generation failed' } : v));
+      } finally {
+        setGeneratingVideosCount(prev => ({ ...prev, current: prev.current + 1 }));
+      }
+    });
+
+    await Promise.allSettled(generationPromises);
   };
 
   // Find the current model object for display
@@ -402,6 +493,92 @@ export default function Home() {
                 </div>
               </div>
 
+              {selectedModelId.includes('nano-banana') && (
+                 <div className="flex flex-col space-y-4">
+                   <div className="flex flex-col space-y-2">
+                     <label className="text-sm font-medium text-slate-400">Aspect Ratio</label>
+                     <div className="flex flex-wrap gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 w-fit">
+                       {['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '5:4', '4:5', '21:9'].map((ratio) => (
+                         <button
+                           key={ratio}
+                           onClick={() => setNanoAspectRatio(ratio)}
+                           className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                             nanoAspectRatio === ratio 
+                               ? 'bg-indigo-600 text-white shadow-sm' 
+                               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                           }`}
+                         >
+                           {ratio}
+                         </button>
+                       ))}
+                     </div>
+                   </div>
+
+                   <div className="flex flex-col space-y-2">
+                     <label className="text-sm font-medium text-slate-400">Resolution (Higher = Slower)</label>
+                     <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 w-fit">
+                       {(selectedModelId === 'nano-banana-pro-4k-vip' ? ['4K'] : 
+                         selectedModelId === 'nano-banana-pro-vip' ? ['1K', '2K'] : 
+                         ['1K', '2K', '4K']).map((res) => (
+                         <button
+                           key={res}
+                           onClick={() => setNanoResolution(res)}
+                           className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                             nanoResolution === res 
+                               ? 'bg-indigo-600 text-white shadow-sm' 
+                               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                           }`}
+                         >
+                           {res}
+                         </button>
+                       ))}
+                     </div>
+                   </div>
+                 </div>
+               )}
+
+               {VIDEO_MODELS.some(m => m.id === selectedModelId) && (
+                 <div className="flex flex-col space-y-2">
+                   <label className="text-sm font-medium text-slate-400">Video Aspect Ratio</label>
+                   <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 w-fit">
+                     {['16:9', '9:16'].map((ratio) => (
+                       <button
+                         key={ratio}
+                         onClick={() => setVideoAspectRatio(ratio)}
+                         className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                           videoAspectRatio === ratio 
+                             ? 'bg-indigo-600 text-white shadow-sm' 
+                             : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                         }`}
+                       >
+                         {ratio}
+                       </button>
+                     ))}
+                   </div>
+                 </div>
+               )}
+
+               {(selectedModelId === 'gpt-image-1.5' || selectedModelId === 'sora-image') && (
+                <div className="flex flex-col space-y-2">
+                  <label className="text-sm font-medium text-slate-400">Image Size (Aspect Ratio)</label>
+                  <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 w-fit">
+                    {['auto', '1:1', '3:2', '2:3'].map((size) => (
+                      <button
+                        key={size}
+                        onClick={() => setImageSize(size)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                          imageSize === size 
+                            ? 'bg-indigo-600 text-white shadow-sm' 
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                        }`}
+                      >
+                        {size}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4">
                 <textarea
                   value={prompt}
@@ -453,8 +630,63 @@ export default function Home() {
 
         {/* STEP 2: LOADING IMAGES */}
         {step === AppStep.GENERATING_IMAGES && (
-          <div className="flex flex-col items-center justify-center min-h-[60vh]">
-            <LoadingBar progress={imageProgress} message="Dreaming up your storyboard..." />
+          <div className="space-y-12 animate-in fade-in duration-500">
+            <div className="text-center space-y-4 max-w-2xl mx-auto">
+              <h3 className="text-2xl font-bold text-white">Dreaming up your storyboard...</h3>
+              <LoadingBar progress={imageProgress} message={`Generating ${images.length} of ${imageCount} frames...`} />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              {images.map((img) => (
+                <div 
+                  key={img.id}
+                  className="flex flex-col bg-slate-800 rounded-xl overflow-hidden border-2 border-slate-700"
+                >
+                  <div className="relative aspect-video">
+                    {img.base64 ? (
+                      <img 
+                        src={`data:${img.mimeType};base64,${img.base64}`} 
+                        alt="Storyboard frame" 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-slate-900 flex flex-col items-center justify-center p-6 text-center space-y-3">
+                        <div className="relative w-16 h-16">
+                          <div className="absolute inset-0 rounded-full border-2 border-indigo-500/20"></div>
+                          <div 
+                            className="absolute inset-0 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"
+                            style={{ animationDuration: '1s' }}
+                          ></div>
+                          <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-indigo-400">
+                            {img.progress || 0}%
+                          </div>
+                        </div>
+                        <span className="text-xs font-medium text-slate-400">
+                          {img.status === 'pending' ? 'Waiting...' : 'Imagining...'}
+                        </span>
+                      </div>
+                    )}
+                    {img.status === 'processing' && (
+                      <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-900">
+                        <div 
+                          className="h-full bg-indigo-500 transition-all duration-500"
+                          style={{ width: `${img.progress || 0}%` }}
+                        ></div>
+                      </div>
+                    )}
+                    {img.status === 'failed' && (
+                      <div className="absolute inset-0 bg-red-900/20 backdrop-blur-sm flex flex-col items-center justify-center p-4 text-center">
+                        <span className="text-red-400 text-xs font-bold uppercase tracking-wider mb-2">Failed</span>
+                        <p className="text-[10px] text-red-300 line-clamp-3">{img.error}</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-4 bg-slate-800/50">
+                    <div className="h-2 w-24 bg-slate-700 rounded animate-pulse"></div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -472,10 +704,29 @@ export default function Home() {
                     onSelect={setSelectedVideoModelId} 
                   />
                 </div>
+
+                <div className="flex-none">
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">2. Aspect Ratio</label>
+                  <div className="flex gap-1 bg-slate-800 p-1 rounded-lg border border-slate-700 w-fit">
+                    {['16:9', '9:16'].map((ratio) => (
+                      <button
+                        key={ratio}
+                        onClick={() => setVideoAspectRatio(ratio)}
+                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                          videoAspectRatio === ratio 
+                            ? 'bg-indigo-600 text-white shadow-sm' 
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                        }`}
+                      >
+                        {ratio}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 
                 <div className="flex items-center gap-4 bg-slate-800 p-4 rounded-xl border border-slate-700">
                   <div className="text-right">
-                    <span className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">2. Ready to Animate</span>
+                    <span className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">3. Ready to Animate</span>
                     <span className="text-sm font-medium text-slate-300">
                       {selectedCount} images selected
                     </span>
@@ -518,11 +769,27 @@ export default function Home() {
                     onClick={() => toggleImageSelection(img.id)}
                     className="relative aspect-video cursor-pointer group"
                   >
-                    <img 
-                      src={`data:${img.mimeType};base64,${img.base64}`} 
-                      alt="Storyboard frame" 
-                      className="w-full h-full object-cover"
-                    />
+                    {img.base64 ? (
+                      <img 
+                        src={`data:${img.mimeType};base64,${img.base64}`} 
+                        alt="Storyboard frame" 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-slate-900 flex flex-col items-center justify-center p-6 text-center space-y-3">
+                        <div className="relative w-16 h-16">
+                          <div className="absolute inset-0 rounded-full border-2 border-indigo-500/20"></div>
+                          <div 
+                            className="absolute inset-0 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"
+                            style={{ animationDuration: '1s' }}
+                          ></div>
+                          <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-indigo-400">
+                            {img.progress || 0}%
+                          </div>
+                        </div>
+                        <span className="text-xs font-medium text-slate-400">Imagining...</span>
+                      </div>
+                    )}
                     <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity duration-200 ${img.selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center ${img.selected ? 'bg-indigo-500 text-white shadow-lg' : 'bg-white/20 text-white backdrop-blur-sm'}`}>
                         {img.selected ? (
@@ -534,6 +801,15 @@ export default function Home() {
                         )}
                       </div>
                     </div>
+                    {/* Individual Progress Bar at bottom of image */}
+                    {img.status === 'processing' && (
+                      <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-900">
+                        <div 
+                          className="h-full bg-indigo-500 transition-all duration-500"
+                          style={{ width: `${img.progress || 0}%` }}
+                        ></div>
+                      </div>
+                    )}
                   </div>
                   
                   <div className="p-4 space-y-3">
@@ -585,6 +861,32 @@ export default function Home() {
                     All videos completed!
                  </div>
                )}
+
+               {videos.some(v => v.status === 'completed') && (
+                 <button
+                   onClick={handleBatchDownload}
+                   disabled={isDownloading}
+                   className={`mt-4 inline-flex items-center gap-2 px-6 py-2 rounded-full font-bold transition-all ${
+                     isDownloading 
+                       ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
+                       : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25'
+                   }`}
+                 >
+                   {isDownloading ? (
+                     <>
+                       <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent animate-spin rounded-full"></div>
+                       Zipping...
+                     </>
+                   ) : (
+                     <>
+                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                       </svg>
+                       Batch Download ({videos.filter(v => v.status === 'completed').length})
+                     </>
+                   )}
+                 </button>
+               )}
              </div>
 
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -623,13 +925,42 @@ export default function Home() {
                                 <span className="text-slate-400 text-sm font-medium bg-slate-900/80 px-3 py-1 rounded-full">Pending...</span>
                               )}
                               {vid.status === 'processing' && (
-                                <div className="flex flex-col items-center gap-2">
-                                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
-                                  <span className="text-indigo-400 text-sm font-medium bg-slate-900/80 px-3 py-1 rounded-full">Rendering...</span>
+                                <div className="flex flex-col items-center gap-4 w-full max-w-[200px]">
+                                  <div className="relative w-16 h-16">
+                                    <div className="absolute inset-0 rounded-full border-4 border-indigo-500/20"></div>
+                                    <svg className="absolute inset-0 w-full h-full -rotate-90">
+                                      <circle
+                                        cx="32"
+                                        cy="32"
+                                        r="28"
+                                        fill="transparent"
+                                        stroke="currentColor"
+                                        strokeWidth="4"
+                                        className="text-indigo-500 transition-all duration-500"
+                                        strokeDasharray={175.9}
+                                        strokeDashoffset={175.9 - (175.9 * (vid.progress || 0)) / 100}
+                                      />
+                                    </svg>
+                                    <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-white">
+                                      {vid.progress || 0}%
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1 w-full">
+                                    <span className="text-indigo-400 text-sm font-medium bg-slate-900/80 px-3 py-1 rounded-full block mx-auto w-fit">
+                                      {vid.progress && vid.progress < 30 ? 'Uploading...' : 'Rendering...'}
+                                    </span>
+                                  </div>
                                 </div>
                               )}
                               {vid.status === 'failed' && (
-                                <span className="text-red-400 text-sm font-medium bg-red-900/20 px-3 py-1 rounded-full border border-red-500/20">Generation Failed</span>
+                                <div className="flex flex-col items-center gap-2">
+                                  <span className="text-red-400 text-sm font-medium bg-red-900/20 px-3 py-1 rounded-full border border-red-500/20">Generation Failed</span>
+                                  {vid.error && (
+                                    <p className="text-[10px] text-red-400/80 max-w-[200px] line-clamp-3 bg-black/50 p-2 rounded-lg backdrop-blur-sm border border-red-500/10">
+                                      {vid.error}
+                                    </p>
+                                  )}
+                                </div>
                               )}
                             </div>
                           </>
@@ -674,6 +1005,16 @@ export default function Home() {
                             <p className="text-xs text-slate-500 line-clamp-2 mt-1" title={vid.prompt}>
                               {vid.prompt}
                             </p>
+                         )}
+
+                         {/* Individual Video Progress Bar at bottom of info section */}
+                         {vid.status === 'processing' && (
+                           <div className="mt-3 h-1.5 w-full bg-slate-900 rounded-full overflow-hidden">
+                             <div 
+                               className="h-full bg-indigo-500 transition-all duration-500"
+                               style={{ width: `${vid.progress || 0}%` }}
+                             ></div>
+                           </div>
                          )}
                       </div>
                     </div>

@@ -13,7 +13,9 @@
     "next:start": "next start",
     "lint": "next lint",
     "electron:dev": "concurrently \"npm run next:dev\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run next:build && electron-builder"
+    "electron:build": "npm run next:build && electron-builder",
+    "electron:build:win": "npm run next:build && electron-builder --win",
+    "electron:build:win64": "npm run next:build && electron-builder --win --x64"
   },
   "build": {
     "appId": "com.story.video.studio",
@@ -42,6 +44,7 @@
     }
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
     "@google/genai": "^1.40.0",
     "@tarojs/components": "3.6.22",
     "@tarojs/helper": "3.6.22",
@@ -52,13 +55,15 @@
     "@tarojs/runtime": "3.6.22",
     "@tarojs/shared": "3.6.22",
     "@tarojs/taro": "3.6.22",
+    "electron-serve": "^3.0.1",
+    "jszip": "^3.10.1",
     "next": "^16.1.6",
     "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "electron-serve": "^3.0.1"
+    "react-dom": "^18.0.0"
   },
   "devDependencies": {
     "@tarojs/cli": "3.6.22",
+    "@types/jszip": "^3.4.0",
     "@types/node": "^22.19.10",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",

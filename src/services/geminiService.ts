@@ -41,7 +41,11 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 /**
  * Common polling logic for task results
  */
-const pollTaskResult = async (taskId: string, modelType: string): Promise<string> => {
+const pollTaskResult = async (
+  taskId: string, 
+  modelType: string,
+  onProgress?: (progress: number) => void
+): Promise<string> => {
   let attempts = 0;
   const MAX_ATTEMPTS = 120; // 10 minutes
   
@@ -61,8 +65,13 @@ const pollTaskResult = async (taskId: string, modelType: string): Promise<string
 
     const resultData = await resultResponse.json();
     const status = resultData.data?.status;
+    const progress = resultData.data?.progress || 0;
     
-    console.log(`${modelType} Task ${taskId} status: ${status} (${resultData.data?.progress || 0}%)`);
+    if (onProgress) {
+      onProgress(progress);
+    }
+
+    console.log(`${modelType} Task ${taskId} status: ${status} (${progress}%)`);
 
     if (status === "succeeded" && (resultData.data?.results?.[0]?.url || resultData.data?.url)) {
       let url = resultData.data?.results?.[0].url?.trim() || resultData.data?.url?.trim();
@@ -81,14 +90,21 @@ const pollTaskResult = async (taskId: string, modelType: string): Promise<string
 /**
  * Handles the Nano Banana specific asynchronous flow.
  */
-const generateNanoBananaImage = async (prompt: string, modelId: string): Promise<string> => {
+const generateNanoBananaImage = async (
+  prompt: string, 
+  modelId: string,
+  onProgress?: (progress: number) => void,
+  aspectRatio: string = "auto",
+  imageSize: string = "1K"
+): Promise<string> => {
   const initResponse = await fetch(`${API_BASE_URL}/draw/nano-banana`, {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify({
       prompt: prompt,
       model: modelId,
-      aspectRatio: "1:1",
+      aspectRatio: aspectRatio,
+      imageSize: imageSize,
       webHook: "-1"
     })
   });
@@ -105,20 +121,25 @@ const generateNanoBananaImage = async (prompt: string, modelId: string): Promise
     throw new Error("No task ID received from Nano Banana API");
   }
 
-  return pollTaskResult(taskId, "Nano Banana");
+  return pollTaskResult(taskId, "Nano Banana", onProgress);
 };
 
 /**
  * Handles the GPT Image / Sora Image specific asynchronous flow.
  */
-const generateGptImage = async (prompt: string, modelId: string): Promise<string> => {
+const generateGptImage = async (
+  prompt: string, 
+  modelId: string,
+  onProgress?: (progress: number) => void,
+  size: string = "1:1"
+): Promise<string> => {
   const initResponse = await fetch(`${API_BASE_URL}/draw/completions`, {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify({
       prompt: prompt,
       model: modelId,
-      size: "1:1",
+      size: size,
       webHook: "-1"
     })
   });
@@ -135,7 +156,7 @@ const generateGptImage = async (prompt: string, modelId: string): Promise<string
     throw new Error("No task ID received from GPT Image API");
   }
 
-  return pollTaskResult(taskId, "GPT Image");
+  return pollTaskResult(taskId, "GPT Image", onProgress);
 };
 
 /**
@@ -145,8 +166,10 @@ const generateGptImage = async (prompt: string, modelId: string): Promise<string
 export const generateBatchImages = async (
   prompt: string, 
   count: number = 20,
-  onProgress: (count: number) => void,
-  modelId: string = "nano-banana-pro"
+  onItemUpdate: (asset: Partial<ImageAsset>) => void,
+  modelId: string = "nano-banana-pro",
+  aspectRatioOrSize: string = "1:1",
+  imageSize: string = "1K"
 ): Promise<ImageAsset[]> => {
   const results: ImageAsset[] = [];
   const TOTAL_IMAGES = count;
@@ -154,56 +177,67 @@ export const generateBatchImages = async (
   try {
     const promises = [];
     for (let i = 0; i < TOTAL_IMAGES; i++) {
+      const assetId = crypto.randomUUID();
+      
+      // Initialize the asset
+      onItemUpdate({
+        id: assetId,
+        status: 'pending',
+        progress: 0
+      });
+
       // Choose the generation function based on modelId
       const generationFn = (modelId === "gpt-image-1.5" || modelId === "sora-image")
-        ? () => generateGptImage(prompt, modelId)
-        : () => generateNanoBananaImage(prompt, modelId);
+        ? (p: string, m: string, cb: (prog: number) => void) => generateGptImage(p, m, cb, aspectRatioOrSize)
+        : (p: string, m: string, cb: (prog: number) => void) => generateNanoBananaImage(p, m, cb, aspectRatioOrSize, imageSize);
 
       promises.push(
-        generationFn()
+        generationFn(prompt, modelId, (prog) => {
+          onItemUpdate({ id: assetId, progress: prog, status: 'processing' });
+        })
           .then(urlOrB64 => {
-             // Check if it's a URL or Base64
-             // If URL, we might need to fetch it to convert to base64 for our app (since we use base64 internally)
-             // Or just store the URL if our app supports it.
-             // Looking at types.ts, ImageAsset expects 'base64'.
-             
              if (urlOrB64.startsWith("http")) {
-               return fetch(urlOrB64)
+               const url = urlOrB64;
+               return fetch(url)
                  .then(res => res.blob())
-                 .then(blob => new Promise<string>((resolve, reject) => {
+                 .then(blob => new Promise<{base64: string, url: string}>((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onloadend = () => {
                         const base64data = reader.result as string;
-                        // remove data:image/png;base64, prefix if present, as our type expects 'base64' content? 
-                        // Actually let's check how it's used.
-                        // In createPlaceholderImage it returned btoa(svg), which is just the base64 string.
-                        // In generateVideoFromImage, it uses `data:${image.mimeType};base64,${image.base64}`.
-                        // So image.base64 should be the RAW base64 string.
-                        
                         const parts = base64data.split(',');
-                        resolve(parts.length > 1 ? parts[1] : base64data);
+                        resolve({
+                          base64: parts.length > 1 ? parts[1] : base64data,
+                          url: url
+                        });
                     };
                     reader.onerror = reject;
                     reader.readAsDataURL(blob);
                  }));
              } else {
-               return urlOrB64;
+               return { base64: urlOrB64, url: '' };
              }
           })
-          .then(base64 => {
+          .then(({base64, url}) => {
              const asset: ImageAsset = {
-               id: crypto.randomUUID(),
+               id: assetId,
                base64: base64,
+               url: url || undefined,
                mimeType: 'image/png', // Assume png
-               selected: false
+               selected: false,
+               status: 'completed',
+               progress: 100
              };
-             // Push directly to results not needed here if we collect them at the end, 
-             // but we need to track progress.
-             // We can't safely push to results array in parallel without locking or being careful,
-             // but JS is single threaded so pushing is fine.
+             onItemUpdate(asset);
              results.push(asset);
-             onProgress(results.length);
              return asset;
+          })
+          .catch(err => {
+            onItemUpdate({ 
+              id: assetId, 
+              status: 'failed', 
+              error: err instanceof Error ? err.message : String(err) 
+            });
+            throw err;
           })
       );
     }
@@ -214,23 +248,43 @@ export const generateBatchImages = async (
     // Check if any succeeded
     const succeeded = outcomes.filter(o => o.status === 'fulfilled');
     
-    if (succeeded.length === 0) {
+    if (succeeded.length === 0 && TOTAL_IMAGES > 0) {
         // If all failed, find the first rejection reason
         const firstError = outcomes.find(o => o.status === 'rejected') as PromiseRejectedResult;
         throw firstError.reason || new Error("All image generations failed.");
     }
     
-    // We already populated `results` inside the .then(), but order might be mixed.
-    // That's fine for now.
-    
   } catch (error) {
     console.error("Image generation error:", error);
-    // If Nano Banana fails, maybe fallback to standard generation?
-    // For now, throw.
     throw error;
   }
 
   return results;
+};
+
+/**
+ * Uploads a base64 image to Azure Storage via the local API route.
+ */
+export const uploadImageToAzure = async (base64: string, mimeType: string): Promise<string> => {
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      base64,
+      mimeType,
+      fileName: `image-${Date.now()}.png`
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to upload image to Azure');
+  }
+
+  const data = await response.json();
+  return data.url;
 };
 
 /**
@@ -240,24 +294,38 @@ export const generateBatchImages = async (
  */
 export const generateVideoFromImage = async (
   prompt: string,
-  base64Image: string,
-  modelId: string = "sora-2.0"
+  imageSource: string, // Can be base64 or URL
+  modelId: string = "sora-2.0",
+  onProgress?: (progress: number) => void,
+  aspectRatio: string = "16:9"
 ): Promise<string> => {
   // Determine endpoint based on model type
   const isVeo = modelId.toLowerCase().includes("veo");
   const endpoint = isVeo ? "/video/veo" : "/video/sora";
   
+  const requestBody: any = {
+    prompt: prompt,
+    model: modelId,
+    duration: "5",
+    aspectRatio: aspectRatio,
+    webHook: "-1"
+  };
+
+  if (isVeo) {
+    // Veo specific structure: image URL should be in 'urls' array
+    requestBody.firstFrameUrl = "";
+    requestBody.lastFrameUrl = "";
+    requestBody.urls = [imageSource];
+    requestBody.shutProgress = false;
+  } else {
+    // Sora or other models
+    requestBody.image = imageSource;
+  }
+  
   const initResponse = await fetch(`${API_BASE_URL}${endpoint}`, {
     method: "POST",
     headers: getHeaders(),
-    body: JSON.stringify({
-      prompt: prompt,
-      model: modelId,
-      image: base64Image,
-      duration: "5",
-      aspectRatio: "1:1",
-      webHook: "-1"
-    })
+    body: JSON.stringify(requestBody)
   });
 
   if (!initResponse.ok) {
@@ -272,7 +340,7 @@ export const generateVideoFromImage = async (
     throw new Error(`No task ID received from ${isVeo ? 'VEO' : 'Sora'} Video API`);
   }
 
-  return pollTaskResult(taskId, isVeo ? 'VEO' : 'Sora');
+  return pollTaskResult(taskId, isVeo ? 'VEO' : 'Sora', onProgress);
 };
 
 
@@ -281,7 +349,9 @@ export const generateVideoFromImage = async (
  */
 export const generateVideoFromText = async (
   prompt: string,
-  modelId: string
+  modelId: string,
+  onProgress?: (progress: number) => void,
+  aspectRatio: string = "16:9"
 ): Promise<string> => {
   console.log(`Generating video using model: ${modelId}`);
 
@@ -291,16 +361,25 @@ export const generateVideoFromText = async (
     const isVeo = modelId.toLowerCase().includes("veo");
     const endpoint = isVeo ? "/video/veo" : "/video/sora";
     
+    const requestBody: any = {
+      prompt: prompt,
+      model: modelId,
+      duration: "5",
+      aspectRatio: aspectRatio,
+      webHook: "-1"
+    };
+
+    if (isVeo) {
+      requestBody.firstFrameUrl = "";
+      requestBody.lastFrameUrl = "";
+      requestBody.urls = [];
+      requestBody.shutProgress = false;
+    }
+    
     const initResponse = await fetch(`${API_BASE_URL}${endpoint}`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify({
-        prompt: prompt,
-        model: modelId,
-        duration: "5",
-        aspectRatio: "1:1",
-        webHook: "-1"
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!initResponse.ok) {
@@ -315,7 +394,7 @@ export const generateVideoFromText = async (
       throw new Error(`No task ID received from ${isVeo ? 'VEO' : 'Sora'} Video API`);
     }
 
-    return pollTaskResult(taskId, isVeo ? 'VEO' : 'Sora');
+    return pollTaskResult(taskId, isVeo ? 'VEO' : 'Sora', onProgress);
   }
 
   // Fallback for standard models
